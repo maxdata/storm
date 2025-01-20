@@ -19,7 +19,7 @@ class GenExpertActionPlanning(dspy.Signature):
     You are an invited speaker in the round table conversation. Your task is to make a very short note to your assistant to help you prepare for your turn in the conversation.
     You will be given the topic we are discussing, your expertise, and the conversation history.
     Take a look at conversation history, especially last few turns, then let your assistant prepare the material for you with one of following ways.
-    1. Original Question: Initiates a new question to other speakers.
+        1. Original Question: Initiates a new question to other speakers.
         2. Further Details: Provides additional information.
         3. Information Request: Requests information from other speakers.
         4. Potential Answer: Offers a possible solution or answer.

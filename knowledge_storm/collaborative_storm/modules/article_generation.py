@@ -13,6 +13,12 @@ class ArticleGenerationModule(dspy.Module):
         self,
         engine: Union[dspy.dsp.LM, dspy.dsp.HFModel],  # Engine for language model processing
     ):
+        """Initialize the article generation module.
+        
+        Args:
+            engine (Union[dspy.dsp.LM, dspy.dsp.HFModel]): The language model engine 
+                used for text generation and processing.
+        """
         super().__init__()  # Initialize the base class
         self.write_section = dspy.Predict(WriteSection)  # Prediction model for writing sections
         self.engine = engine  # Store the engine for later use
@@ -23,6 +29,17 @@ class ArticleGenerationModule(dspy.Module):
         knowledge_base: KnowledgeBase,  # Knowledge base containing information
         max_words: int = 1500,  # Maximum number of words to include
     ):
+        """
+        Generate formatted information text from citation indices and knowledge base.
+
+        Args:
+            all_citation_index (Set[int]): Set of citation indices to process
+            knowledge_base (KnowledgeBase): Knowledge base containing the information
+            max_words (int, optional): Maximum number of words to include. Defaults to 1500.
+
+        Returns:
+            str: Formatted string containing information from citations, joined by newlines
+        """
         information = []  # List to store information strings
         cur_word_count = 0  # Current word count
         for index in sorted(list(all_citation_index)):  # Iterate over sorted citation indices
@@ -36,9 +53,23 @@ class ArticleGenerationModule(dspy.Module):
             information.append(info_text)  # Add formatted text to information list
         return "\n".join(information)  # Return the information as a single string
 
-    def gen_section(
-        self, topic: str, node: KnowledgeNode, knowledge_base: KnowledgeBase  # Generate a section for a given topic and node
+    def synthesize_node(
+        self,
+        node,
+        topic: str,
+        knowledge_base,
     ):
+        """
+        Synthesizes content for a given node by either returning existing output or generating new content.
+        
+        Args:
+            node: The node object containing content to synthesize
+            topic (str): The main topic for content generation
+            knowledge_base: The knowledge base containing citation iznformation
+            
+        Returns:
+            str: The synthesized content for the node
+        """
         if node is None or len(node.content) == 0:  # Check if node is empty
             return ""  # Return empty string if no content
         if (
@@ -61,50 +92,76 @@ class ArticleGenerationModule(dspy.Module):
         node.need_regenerate_synthesize_output = False  # Mark that regeneration is not needed
         return node.synthesize_output  # Return the synthesized output
 
-    def forward(self, knowledge_base: KnowledgeBase):  # Forward method to process the knowledge base
-        all_nodes = knowledge_base.collect_all_nodes()  # Collect all nodes from the knowledge base
-        node_to_paragraph = {}  # Dictionary to map node paths to paragraphs
+    def forward(self, knowledge_base: KnowledgeBase):
+        """
+        Process a knowledge base to generate a structured document with paragraphs for each node.
+        
+        Args:
+            knowledge_base (KnowledgeBase): The knowledge base containing nodes to process
+            
+        Returns:
+            dict: A mapping of node paths to generated paragraphs
+        """
+        all_nodes = knowledge_base.collect_all_nodes()
+        node_to_paragraph = {}
 
-        # Define a function to generate paragraphs for nodes
         def _node_generate_paragraph(node):
-            node_gen_paragraph = self.gen_section(
-                topic=knowledge_base.topic, node=node, knowledge_base=knowledge_base  # Generate section for the node
+            """
+            Generate a paragraph for a single node in the knowledge base.
+            
+            Args:
+                node: The node to generate content for
+                
+            Returns:
+                tuple: A tuple containing (node_path, generated_paragraph)
+            """
+            node_gen_paragraph = self.synthesize_node(
+                node=node, topic=knowledge_base.topic, knowledge_base=knowledge_base
             )
-            lines = node_gen_paragraph.split("\n")  # Split the generated paragraph into lines
-            if lines[0].strip().replace("*", "").replace("#", "") == node.name:  # Check if the first line is the node name
-                lines = lines[1:]  # Remove the first line if it is the node name
-            node_gen_paragraph = "\n".join(lines)  # Join the lines back into a paragraph
-            path = " -> ".join(node.get_path_from_root())  # Get the path from root to the node
-            return path, node_gen_paragraph  # Return the path and paragraph
+            lines = node_gen_paragraph.split("\n")
+            if lines[0].strip().replace("*", "").replace("#", "") == node.name:
+                lines = lines[1:]
+            node_gen_paragraph = "\n".join(lines)
+            path = " -> ".join(node.get_path_from_root())
+            return path, node_gen_paragraph
 
-        with ThreadPoolExecutor(max_workers=5) as executor:  # Use a thread pool executor for parallel processing
-            # Submit all tasks
+        with ThreadPoolExecutor(max_workers=5) as executor:
             future_to_node = {
-                executor.submit(_node_generate_paragraph, node): node  # Submit node generation tasks
+                executor.submit(_node_generate_paragraph, node): node
                 for node in all_nodes
             }
 
-            # Collect the results as they complete
-            for future in as_completed(future_to_node):  # Iterate over completed futures
-                path, node_gen_paragraph = future.result()  # Get the result of the future
-                node_to_paragraph[path] = node_gen_paragraph  # Map the path to the generated paragraph
+            for future in as_completed(future_to_node):
+                path, node_gen_paragraph = future.result()
+                node_to_paragraph[path] = node_gen_paragraph
 
-        def helper(cur_root, level):  # Helper function to recursively build the document
-            to_return = []  # List to store the document parts
-            if cur_root is not None:  # Check if the current root is not None
-                hash_tag = "#" * level + " "  # Create a hash tag for the current level
-                cur_path = " -> ".join(cur_root.get_path_from_root())  # Get the path from root to the current node
-                node_gen_paragraph = node_to_paragraph[cur_path]  # Get the generated paragraph for the current path
-                to_return.append(f"{hash_tag}{cur_root.name}\n{node_gen_paragraph}")  # Append the formatted section
-                for child in cur_root.children:  # Iterate over the children of the current root
-                    to_return.extend(helper(child, level + 1))  # Recursively process each child
-            return to_return  # Return the document parts
+        def helper(cur_root, level):
+            """
+            Recursively build the document structure from the knowledge base nodes.
+            
+            Args:
+                cur_root: The current node being processed
+                level (int): The current heading level in the document
+                
+            Returns:
+                list: List of formatted document sections
+            """
+            to_return = []
+            if cur_root is not None:
+                hash_tag = "#" * level + " "
+                cur_path = " -> ".join(cur_root.get_path_from_root())
+                node_gen_paragraph = node_to_paragraph[cur_path]
+                to_return.append(f"{hash_tag}{cur_root.name}\n{node_gen_paragraph}")
 
-        to_return = []  # List to store the final document
-        for child in knowledge_base.root.children:  # Iterate over the children of the root node
-            to_return.extend(helper(child, level=1))  # Build the document starting from each child
+            for child in cur_root.children:
+                to_return.extend(helper(child, level + 1))
+            return to_return
 
-        return "\n".join(to_return)  # Return the final document as a single string
+        to_return = []
+        for child in knowledge_base.root.children:
+            to_return.extend(helper(child, level=1))
+
+        return "\n".join(to_return)
 
 
 class WriteSection(dspy.Signature):
